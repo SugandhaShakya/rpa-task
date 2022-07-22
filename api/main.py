@@ -2,15 +2,37 @@ from fastapi import FastAPI, UploadFile, File,HTTPException, status, Header, Dep
 import aiofiles
 import cv2
 import os
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import ASGIApp
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 dirname = os.path.dirname(__file__)
+
+class LimitUploadSize(BaseHTTPMiddleware):
+    def __init__(self, app: ASGIApp, max_upload_size: int) -> None:
+        super().__init__(app)
+        self.max_upload_size = max_upload_size
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method == 'POST':
+            if 'content-length' not in request.headers:
+                return JSONResponse(content={'detail' : 'Content-Length required'}, status_code=status.HTTP_411_LENGTH_REQUIRED)
+            content_length = int(request.headers['content-length'])
+            if content_length > self.max_upload_size:
+                return JSONResponse(content={"detail": "File size too large"},status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        return await call_next(request)
+
 
 def get_relative_path(relative_path):
     filename = os.path.join(dirname, relative_path)
     return filename
 
 app = FastAPI()
+
+app.add_middleware(LimitUploadSize, max_upload_size= 1024*1024*1024)
 
 def get_duration(filename):
     video = cv2.VideoCapture(filename)
@@ -20,12 +42,10 @@ def get_duration(filename):
     return seconds 
 
 @app.post("/")
-async def root(file: UploadFile = File(...)):
+async def root(file: UploadFile = File(...,format=[".mp4",".mkv"])):
     if file.content_type != "video/mp4" and file.content_type != "video/x-matroska":
         raise HTTPException(400, detail="Invalid document type : Accepted mp4, mkv")
     contents = await file.read()
-    if(len(contents) > 1073741824): 
-        raise HTTPException(400, detail="File size too big !")
 
     out_file_path = get_relative_path(f'..\\videos\\{file.filename}')
 
